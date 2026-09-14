@@ -1,0 +1,13 @@
+# Windows 에서 작업하지만 실행은 Linux(WSL / EC2) 다.
+# git 이 체크아웃 때 CRLF 로 바꾸면 스크립트가 깨진다. 실제로 겪은 증상:
+#   runner/s2_sweep.sh: line 29: set: pipefail: invalid option name
+# (`set -euo pipefail\r` 이 되어 bash 가 아닌 dash 로 해석된 것처럼 실패)
+# docs/02-harness.md 참조.
+*.sh   text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.csv  text eol=lf
+*.json text eol=lf
+*.txt  text eol=lf
+
+*.png binary

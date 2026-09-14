@@ -1,0 +1,15 @@
+# Spark event log — 전체 results 의 95% (503M / 532M).
+# 재생성 가능하고, 분석에 필요한 정보는 이미 tasks.csv / summary.csv 로 추출돼 있다.
+# (parse/parse_eventlog.py 가 SparkListenerTaskEnd + AQE 플랜 마커를 뽑아 둠)
+results/**/eventlog/
+
+# 인스턴스 ID·IP·키 경로. 인스턴스는 소모품이라 매번 새로 생긴다.
+env/.ec2-state
+
+# 임시/스모크 결과
+results/smoke*/
+results/*diag*/
+
+__pycache__/
+*.pyc
+.venv/

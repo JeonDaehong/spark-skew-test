@@ -1,0 +1,73 @@
++ echo '## CPU'
+## CPU
++ lscpu
++ grep -E 'Model name|^CPU\(s\)|Thread|Core|MHz'
+CPU(s):                                  16
+Model name:                              Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz
+BIOS Model name:                         Intel(R) Xeon(R) Platinum 8375C CPU @ 2.90GHz  CPU @ 2.9GHz
+Thread(s) per core:                      2
+Core(s) per socket:                      8
++ echo '## MEM'
+## MEM
++ free -g
+               total        used        free      shared  buff/cache   available
+Mem:              61           1          57           0           3          60
+Swap:              0           0           0
++ echo '## DISK'
+## DISK
++ lsblk -o NAME,SIZE,ROTA,TYPE,MOUNTPOINT
+NAME           SIZE ROTA TYPE MOUNTPOINT
+loop0         28.4M    0 loop /snap/amazon-ssm-agent/13349
+loop1           74M    0 loop /snap/core22/2437
+loop2         50.1M    0 loop /snap/snapd/27710
+nvme1n1      884.8G    0 disk /data
+nvme0n1         60G    0 disk 
+├─nvme0n1p1     59G    0 part /
+├─nvme0n1p14     4M    0 part 
+├─nvme0n1p15   106M    0 part /boot/efi
+└─nvme0n1p16   913M    0 part /boot
++ echo '## PSI'
+## PSI
++ cat /proc/pressure/io
+some avg10=11.91 avg60=12.75 avg300=5.14 total=18547409
+full avg10=11.90 avg60=12.68 avg300=5.11 total=18479162
++ echo '## BTF'
+## BTF
++ ls -la /sys/kernel/btf/vmlinux
+-r--r--r-- 1 root root 7156744 Sep 13 07:00 /sys/kernel/btf/vmlinux
++ echo '## CGROUP'
+## CGROUP
++ stat -fc %T /sys/fs/cgroup
+cgroup2fs
++ echo '## DIRTY'
+## DIRTY
++ sysctl vm.dirty_ratio vm.dirty_background_ratio
+vm.dirty_ratio = 20
+vm.dirty_background_ratio = 10
++ echo '## GOVERNOR'
+## GOVERNOR
++ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
++ echo 'no cpufreq'
+no cpufreq
++ echo '## JAVA'
+## JAVA
++ java -version
++ head -1
+openjdk version "21.0.12" 2026-07-21
++ echo '## PYSPARK'
+## PYSPARK
++ /opt/venv/bin/python -c 'import pyspark;print(pyspark.__version__)'
+4.0.1
++ echo '## PMU'
+## PMU
++ cat /opt/PMU_CHECK.txt
++ echo '--- perf version ---'
+--- perf version ---
++ perf --version
+perf version 7.0.14
++ echo '--- HW counters? ---'
+--- HW counters? ---
++ perf stat -e cycles,instructions,cache-misses,branch-misses -- sleep 0.2
+Error:
+No supported events found.
+The cycles event is not supported.
