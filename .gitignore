@@ -7,7 +7,7 @@ results/**/eventlog/
 env/.ec2-state
 
 # 임시/스모크 결과
-results/smoke*/
+results/*smoke*/
 results/*diag*/
 
 __pycache__/
