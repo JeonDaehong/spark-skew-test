@@ -16,6 +16,7 @@
 | [10b-s1-ec2-replication.md](10b-s1-ec2-replication.md) | **S1 EC2 재현.** 계단이 머신의 성질인가 Spark의 성질인가 |
 | [11-s2-methodology-and-results.md](11-s2-methodology-and-results.md) | **S2 방법론 + 결과.** bytes vs records 비용 분해, 천장 높이, 계단 이동 |
 | [12-s4-methodology-and-results.md](12-s4-methodology-and-results.md) | **S4 방법론 + 결과.** AQE의 record-skew 사각지대 (P3) |
+| [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 / 디스크는 넘는 순간에만 비용이다 |
 
 ## 현재 상태 (2026-09-13)
 
@@ -39,7 +40,15 @@
   - 사각지대 비용: record R=64에서 1,274ms → **3,481ms (2.73배)**, AQE는 무반응
   - **AQE가 구제한 파티션(1,618ms)보다 무시한 파티션(3,634ms)이 2.2배 느림**
   - ⚠️ R=64에서 byte skew가 2.51로 상승(순수 record 효과 아님) · 4/60 run OOM
-- ⬜ S3 (cores-per-executor), S4c (MapStatus/P6), S5·S6 (커널), S7~S9
+- ✅ **문헌 재확인 완료** (2026-09-14) — **P6 폐기** (SPARK-48290으로 이미 보고됨), P3·P4 표현 하향
+- ✅ **S5 완료** (36 run) — **P5 거짓.** `vm.dirty_ratio`를 10배 조여 Dirty를 5,952→587 MiB로 눌렀는데
+  task 시간 변화 ±3.6% 이내. `balance_dirty_pages` 동기 블로킹은 발동조차 안 함
+- 🔶 **S6 부분 완료** (21/36 run) — **디스크는 넘는 순간에만 비용이다**
+  - 쓰기를 50 MB/s로 조이면 skew 64에서 lz4 **6.1배**, none **7.6배** 느려짐 — 그런데 **zstd는 1.00배**
+  - 규칙: `spill_bytes / bandwidth < compute_time` 이면 I/O는 연산 아래로 숨어 공짜
+  - **최적 codec이 뒤집힌다**: 빠른 디스크 → 압축 끄기(22% 이득), 느린 디스크 → zstd(6배 이득)
+  - ⚠️ n=1~2, 36 run 미완 · cap 레벨 2개뿐이라 교차점 미관측
+- ⬜ S6 잔여 + cap 레벨 추가, S3, S7~S9
 
 ## 빠른 시작
 

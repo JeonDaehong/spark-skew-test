@@ -15,7 +15,11 @@ import time
 MEMINFO_KEYS = ("MemTotal", "MemFree", "MemAvailable", "Cached", "Dirty",
                 "Writeback", "WritebackTmp", "SwapCached")
 VMSTAT_KEYS = ("nr_dirty", "nr_writeback", "pgpgin", "pgpgout", "pgfault",
-               "pgmajfault", "pswpout")
+               "pgmajfault", "pswpout",
+               # 커널이 실제로 계산한 dirty 임계값. sysctl 의 % 가 아니라 페이지 수다.
+               # "spill 이 임계를 넘었는가"를 추정이 아니라 실측으로 판정하기 위해 필요.
+               "nr_dirty_threshold", "nr_dirty_background_threshold",
+               "nr_writeback_temp")
 
 
 def _read_meminfo():

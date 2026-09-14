@@ -58,6 +58,15 @@ def drop_caches():
         return False
 
 
+def read_sysctl(path):
+    """/proc/sys/<path> 를 정수로. 실험 조건을 결과에 박아두기 위한 것."""
+    try:
+        with open("/proc/sys/" + path) as fh:
+            return int(fh.read().strip())
+    except Exception:
+        return -1
+
+
 def build_session(args, eventlog_dir):
     os.makedirs(eventlog_dir, exist_ok=True)
 
@@ -157,6 +166,8 @@ def main():
     ap.add_argument("--skew-mode", default="byte", choices=["byte", "record"],
                     help="결과 라벨. byte=바이트·레코드 동시 치우침, record=레코드만 치우침")
     ap.add_argument("--record-skew", type=float, default=1.0, help="결과 라벨")
+    ap.add_argument("--io-cap-mbps", type=int, default=0,
+                    help="결과 라벨. cgroup io.max 로 건 디바이스 대역폭 상한(MB/s). 0=무제한")
     ap.add_argument("--tag", default="s1")
     # 경로
     ap.add_argument("--results", default=None)
@@ -221,6 +232,7 @@ def main():
         "workload": args.workload,
         "skew": args.skew,
         "skew_mode": args.skew_mode,
+        "io_cap_mbps": args.io_cap_mbps,
         "record_skew": args.record_skew,
         "row_bytes": args.row_bytes,
         "cores": args.cores,
@@ -241,6 +253,17 @@ def main():
         "delta_psi_cpu_some_us": post.get("psi_cpu_some_total", 0) - pre.get("psi_cpu_some_total", 0),
         "delta_ctxt": post.get("ctxt", 0) - pre.get("ctxt", 0),
         "peak_dirty_kb": max((r.get("mem_Dirty", 0) for r in sampler.rows), default=0),
+        # --- 커널 writeback 스로틀링 증거 (S5/S6) ---
+        # dirty_threshold 는 커널이 계산한 실제 임계(페이지). peak_dirty 가 이걸 넘으면
+        # balance_dirty_pages() 가 쓰는 스레드를 D-state 로 동기 블로킹한다.
+        "vm_dirty_ratio": read_sysctl("vm/dirty_ratio"),
+        "vm_dirty_background_ratio": read_sysctl("vm/dirty_background_ratio"),
+        "dirty_threshold_pages": max((r.get("vm_nr_dirty_threshold", 0) for r in sampler.rows), default=0),
+        "dirty_bg_threshold_pages": max((r.get("vm_nr_dirty_background_threshold", 0) for r in sampler.rows), default=0),
+        "peak_nr_dirty_pages": max((r.get("vm_nr_dirty", 0) for r in sampler.rows), default=0),
+        "peak_writeback_pages": max((r.get("vm_nr_writeback", 0) for r in sampler.rows), default=0),
+        # D-state(uninterruptible sleep) = I/O 대기로 막힌 프로세스 수
+        "peak_procs_blocked": max((r.get("procs_blocked", 0) for r in sampler.rows), default=0),
         "peak_writeback_kb": max((r.get("mem_Writeback", 0) for r in sampler.rows), default=0),
     }
     with open(os.path.join(run_dir, "meta.json"), "w") as fh:
