@@ -29,12 +29,12 @@ nvme0n1         60G    0 disk
 + echo '## PSI'
 ## PSI
 + cat /proc/pressure/io
-some avg10=8.37 avg60=6.67 avg300=2.43 total=8802927
-full avg10=8.37 avg60=6.67 avg300=2.43 total=8771909
+some avg10=8.16 avg60=7.60 avg300=2.86 total=10485667
+full avg10=8.16 avg60=7.58 avg300=2.85 total=10432771
 + echo '## BTF'
 ## BTF
 + ls -la /sys/kernel/btf/vmlinux
--r--r--r-- 1 root root 7156744 Sep 14 12:10 /sys/kernel/btf/vmlinux
+-r--r--r-- 1 root root 7156744 Sep 16 12:12 /sys/kernel/btf/vmlinux
 + echo '## CGROUP'
 ## CGROUP
 + stat -fc %T /sys/fs/cgroup

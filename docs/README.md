@@ -17,6 +17,7 @@
 | [11-s2-methodology-and-results.md](11-s2-methodology-and-results.md) | **S2 방법론 + 결과.** bytes vs records 비용 분해, 천장 높이, 계단 이동 |
 | [12-s4-methodology-and-results.md](12-s4-methodology-and-results.md) | **S4 방법론 + 결과.** AQE의 record-skew 사각지대 (P3) |
 | [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 / 디스크는 넘는 순간에만 비용이다 (+2026-09-16 정정) |
+| [15-s6v2-contradiction.md](15-s6v2-contradiction.md) | ⛔ **S6 재실험 72 run — "6.1배"가 재현 안 됨.** 양봉 현상, 규칙 2건 철회 |
 | [14-spill-anatomy.md](14-spill-anatomy.md) | **spill 해부.** "고정 136.5 MiB"의 정체 — 반올림 착시 + spill하는 task는 200개 중 하나 |
 
 ## 현재 상태 (2026-09-13)

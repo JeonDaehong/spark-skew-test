@@ -13,11 +13,22 @@
 # Ousterhout et al. (NSDI'15) 은 job 레벨에서 "병목은 대개 CPU"라고 했다.
 # 여기서는 skew 를 통제한 채, 2026 년 NVMe 위에서, spill 경로만 놓고 재확인한다.
 #
-# 설계 (2 x 4 x 2)
-# ---------------
-#   skew      16 (cliff 이전, spill 적음) · 64 (cliff 이후, spill 1.8GB)
-#   codec     lz4 · zstd · snappy · none(shuffle.compress=false)
-#   io cap    무제한 · 100 MB/s   (cgroup v2 io.max, systemd-run scope)
+# 2026-09-16 개정 — 검증할 규칙이 바뀌었다
+# --------------------------------------
+# 1차 S6(21 run) 분석 결과 "spill / 대역폭" 이 아니라 **총 쓰기량 / 대역폭** 이
+# 맞다는 것이 드러났다 (spill 은 job 이 쓰는 양의 23% 뿐. 나머지는 shuffle write).
+# docs/13 정정 · docs/14 참조.
+#
+#   예측:  wall_time >= (shuffle_write + spill) / bandwidth
+#
+# cap 을 4단계로 걸어 이 예측이 여러 대역폭에서 성립하는지 곡선으로 확인한다.
+# cap 2단계(무제한/50)로는 교차점을 볼 수 없었다.
+#
+# 설계 (2 skew x 3 codec x 4 cap x 3 rep = 72 run)
+# ----------------------------------------------
+#   skew      16 (임계 아래 대조군) · 64 (노출 구간)
+#   codec     lz4 · zstd · none(shuffle.compress=false)
+#   io cap    무제한 · 200 · 100 · 50 MB/s   (cgroup v2 io.max, systemd-run scope)
 #   reps      3
 #
 # 판정
@@ -40,9 +51,9 @@ P=${P:-200}
 CORES=${CORES:-4}
 MEM=${MEM:-1500m}
 REPS=${REPS:-3}
-SKEWS=${SKEWS:-"16 64"}
+SKEWS=${SKEWS:-"16 64"}              # 16=임계 아래 대조군, 64=노출 구간
 CODECS=${CODECS:-"lz4 zstd none"}    # snappy 는 lz4 와 특성이 비슷해 제외
-IO_CAPS=${IO_CAPS:-"0 50"}           # MB/s(쓰기만). spill 평균 쓰기가 ~75MB/s 라 50 이어야 물린다
+IO_CAPS=${IO_CAPS:-"0 200 100 50"}   # MB/s(쓰기만), 0=무제한. 4단계로 교차점 곡선을 그린다
 TAG=${TAG:-s6}
 
 # --target 을 써야 한다: SPARK_SKEW_DATA 는 마운트포인트가 아니라 그 하위 디렉토리라
@@ -68,15 +79,18 @@ verify_cap() {
   rm -f "$SPARK_SKEW_SCRATCH/_iotest"
   echo "$out"
 }
-echo "### io.max 검증 (cap=50 MB/s 로 600MB direct write)"
-RES=$(verify_cap 50)
+# 가장 낮은 cap 으로 검증한다 — 그게 안 걸리면 나머지도 의미 없다
+LOWEST=$(echo $IO_CAPS | tr ' ' '
+' | grep -v '^0$' | sort -n | head -1)
+echo "### io.max 검증 (cap=${LOWEST} MB/s 로 600MB direct write)"
+RES=$(verify_cap "$LOWEST")
 echo "  $RES"
 MEASURED=$(echo "$RES" | grep -oP '[0-9.]+(?= MB/s)' | tail -1 || echo "")
 if [ -z "$MEASURED" ]; then
   echo "  !! 측정 실패 — 중단. io.max 가 안 걸린 채 돌면 결론이 뒤집힌다."; exit 1
 fi
-if [ "$(echo "$MEASURED > 120" | bc -l)" = "1" ]; then
-  echo "  !! cap 이 안 먹었다 (${MEASURED} MB/s > 120). 중단."
+if [ "$(echo "$MEASURED > $LOWEST * 2.4" | bc -l)" = "1" ]; then
+  echo "  !! cap 이 안 먹었다 (${MEASURED} MB/s, 목표 ${LOWEST}). 중단."
   echo "     cgroup io 컨트롤러 / 파일시스템 cgroup writeback 지원을 확인할 것."
   exit 1
 fi

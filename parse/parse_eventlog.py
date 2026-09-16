@@ -157,6 +157,12 @@ def summarize(tasks):
     return {
         "n_tasks_total": len(tasks),
         "reduce_stage_id": reduce_stage,
+        # --- job 전체가 디스크에 쓰는 양 (S6: 병목을 정하는 건 spill 이 아니라 이것) ---
+        # 모든 스테이지의 shuffle write 를 합한다. map 스테이지가 데이터셋 전체를 쓰므로
+        # reduce 의 spill 보다 한 자릿수 크다. docs/13 정정 · docs/14 참조.
+        "sw_bytes_all_stages": sum(t["sw_bytes"] for t in tasks),
+        "spill_disk_all_stages": sum(t["spill_disk"] for t in tasks),
+        "total_written_bytes": sum(t["sw_bytes"] + t["spill_disk"] for t in tasks),
         "n_reduce_tasks": len(reduce_tasks),
         # --- task duration 분포 (cliff 곡선의 y축 후보들) ---
         "task_ms_p50": med_d,
