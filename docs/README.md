@@ -16,7 +16,8 @@
 | [10b-s1-ec2-replication.md](10b-s1-ec2-replication.md) | **S1 EC2 재현.** 계단이 머신의 성질인가 Spark의 성질인가 |
 | [11-s2-methodology-and-results.md](11-s2-methodology-and-results.md) | **S2 방법론 + 결과.** bytes vs records 비용 분해, 천장 높이, 계단 이동 |
 | [12-s4-methodology-and-results.md](12-s4-methodology-and-results.md) | **S4 방법론 + 결과.** AQE의 record-skew 사각지대 (P3) |
-| [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 / 디스크는 넘는 순간에만 비용이다 |
+| [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 / 디스크는 넘는 순간에만 비용이다 (+2026-09-16 정정) |
+| [14-spill-anatomy.md](14-spill-anatomy.md) | **spill 해부.** "고정 136.5 MiB"의 정체 — 반올림 착시 + spill하는 task는 200개 중 하나 |
 
 ## 현재 상태 (2026-09-13)
 
@@ -53,6 +54,11 @@
   - spill 1,792 MiB vs 실제 디스크 출력 **7,728 MiB** — 나머지는 shuffle write
   - 7,728/50 = 155s ≈ 실측 162s. **설명 안 되던 6.1배는 분모를 잘못 고른 것이었다**
   - zstd가 이기는 이유도 정정: spill이 아니라 **총 쓰기량**이 lz4의 54%라서
+- ✅ **136.5 MiB 수수께끼 해결** (2026-09-16, 재실행 없이 tasks.csv 분석)
+  - "고정"이 아니었다 — raw는 143,173,819 / 143,167,339 / 143,161,152 bytes로 다른데
+    **MiB 반올림이 같아 보이게 만들었다**
+  - spill하는 task는 200개 중 **단 하나**(hot 파티션, index 191). "배경"이 아니었다
+  - 크기는 파티션 크기가 아니라 **sorter가 첫 할당 실패를 맞은 시점의 누적량**이 정한다
 - ⬜ S6 잔여 + cap 레벨 추가, S3, S7~S9
 
 ## 빠른 시작
