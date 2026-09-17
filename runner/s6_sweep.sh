@@ -134,7 +134,11 @@ for rep in $(seq 0 $((REPS-1))); do
           # 쓰기만 제한한다 — 읽기까지 막으면 8GiB 파케이 스캔(캡 50MB/s 면 160초)이
           # 전체를 지배해서 "spill 이 느린 것"이 아니라 "입력 읽기가 느린 것"을 재게 된다.
           # --uid=ubuntu: 결과 파일 소유자를 유지해야 나중에 rsync 로 회수할 수 있다.
+          # IOAccounting/MemoryAccounting 을 함께 켠다. cgroup writeback 귀속은
+          # io 와 memory 컨트롤러가 같은 cgroup 에 있어야 성립한다. 이게 없으면
+          # 버퍼드 쓰기의 writeback 이 스로틀을 그냥 통과한다 (S6 v2 에서 26% 발생).
           sudo systemd-run --scope --quiet --uid=ubuntu \
+            -p "IOAccounting=yes" -p "MemoryAccounting=yes" \
             -p "IOWriteBandwidthMax=$SPARK_SKEW_DATA $((cap * 1000000))" \
             env SPARK_SKEW_DATA="$SPARK_SKEW_DATA" \
                 SPARK_SKEW_SCRATCH="$SPARK_SKEW_SCRATCH" \
@@ -150,5 +154,27 @@ echo
 echo "  elapsed: $(( ($(date +%s) - start) / 60 )) min"
 echo "### parse"
 python parse/parse_eventlog.py --tag "$TAG"
+
+# cap 이 실제로 걸렸는지는 run 마다 사후 검증된다 (run_one.py: _verify_io_cap).
+# 미적용 run 은 사실상 무제한이므로 분석에서 반드시 걸러야 한다.
+echo
+echo "### io.max 적용률"
+python - "$TAG" <<'PYEOF'
+import glob, json, sys
+tag = sys.argv[1]
+tot = ok = 0
+for p in sorted(glob.glob(f"results/{tag}/*/meta.json")):
+    j = json.load(open(p))
+    if j.get("io_cap_applied") is None:
+        continue
+    tot += 1
+    ok += bool(j["io_cap_applied"])
+if tot:
+    print(f"  제한 run {tot}개 중 실제 적용 {ok}개 ({100*ok/tot:.0f}%)")
+    if ok < tot:
+        print("  !! 미적용 run 존재. summary.csv 의 io_cap_applied 로 필터링할 것.")
+else:
+    print("  (제한 run 없음)")
+PYEOF
 echo
 echo "다음: python analysis/plot_s6.py --tag $TAG"

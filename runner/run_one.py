@@ -58,6 +58,33 @@ def drop_caches():
         return False
 
 
+def _verify_io_cap(cap_mbps, pgpgout_delta_kb, wall_seconds):
+    """
+    선언한 io.max 대역폭 상한이 이 run 에 실제로 걸렸는지 사후 검증한다.
+
+    왜 사후 검증인가
+    ----------------
+    스윕 시작 시 `dd oflag=direct` 로 한 번 확인하는 것으로는 부족하다.
+    direct I/O 는 발행한 cgroup 의 bio 큐를 반드시 통과하지만, Spark 의 쓰기는
+    버퍼드라 나중에 writeback 경로로 나간다. cgroup writeback 귀속이 성립하지
+    않으면 스로틀이 **조용히** 무력화된다.
+
+    2026-09-16 S6 v2 에서 실제로 제한 run 54 개 중 14 개(26%)가 그랬고,
+    cap 이 낮을수록 실패율이 높았다 (200MB/s 0% · 100MB/s 28% · 50MB/s 50%).
+    이걸 못 보고 "같은 조건인데 결과가 양봉으로 갈린다"는 없는 결론을 냈다.
+
+    판정: run 전체 평균 쓰기 속도가 cap 의 1.5 배를 넘으면 미적용으로 본다.
+    """
+    if not cap_mbps or not wall_seconds:
+        return {"io_cap_applied": None, "avg_write_mbps": None}
+    avg = (pgpgout_delta_kb / 1024) / wall_seconds          # MiB/s
+    applied = avg <= cap_mbps * 1.5
+    if not applied:
+        print(f"[run] WARN: io.max 미적용 의심 — 평균 쓰기 {avg:.1f} MB/s "
+              f"> cap {cap_mbps} MB/s. 이 run 은 사실상 무제한이다.", file=sys.stderr)
+    return {"io_cap_applied": applied, "avg_write_mbps": round(avg, 1)}
+
+
 def read_sysctl(path):
     """/proc/sys/<path> 를 정수로. 실험 조건을 결과에 박아두기 위한 것."""
     try:
@@ -264,6 +291,15 @@ def main():
         "peak_writeback_pages": max((r.get("vm_nr_writeback", 0) for r in sampler.rows), default=0),
         # D-state(uninterruptible sleep) = I/O 대기로 막힌 프로세스 수
         "peak_procs_blocked": max((r.get("procs_blocked", 0) for r in sampler.rows), default=0),
+        # --- io.max 가 이 run 에 실제로 걸렸는지 (S6 에서 크게 데였다) ---
+        # dd oflag=direct 로 스윕 시작 때 한 번 검증하는 것으로는 부족하다.
+        # Spark 는 버퍼드 쓰기를 쓰고, 그 writeback 이 cgroup 에 귀속되지 않으면
+        # 스로틀이 조용히 무력화된다. 실제로 54 run 중 14 run(26%)이 그랬고,
+        # 그 탓에 "양봉 현상"이라는 없는 결론을 냈다. docs/16 참조.
+        # 그래서 run 마다 사후 검증한다: 평균 쓰기 속도가 cap 을 넘으면 미적용이다.
+        **_verify_io_cap(args.io_cap_mbps,
+                         post.get("vm_pgpgout", 0) - pre.get("vm_pgpgout", 0),
+                         wall),
         "peak_writeback_kb": max((r.get("mem_Writeback", 0) for r in sampler.rows), default=0),
     }
     with open(os.path.join(run_dir, "meta.json"), "w") as fh:

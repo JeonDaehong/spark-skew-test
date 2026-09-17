@@ -16,7 +16,8 @@
 | [10b-s1-ec2-replication.md](10b-s1-ec2-replication.md) | **S1 EC2 재현.** 계단이 머신의 성질인가 Spark의 성질인가 |
 | [11-s2-methodology-and-results.md](11-s2-methodology-and-results.md) | **S2 방법론 + 결과.** bytes vs records 비용 분해, 천장 높이, 계단 이동 |
 | [12-s4-methodology-and-results.md](12-s4-methodology-and-results.md) | **S4 방법론 + 결과.** AQE의 record-skew 사각지대 (P3) |
-| [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 / 디스크는 넘는 순간에만 비용이다 (+2026-09-16 정정) |
+| [13-s5-s6-kernel-and-disk.md](13-s5-s6-kernel-and-disk.md) | **S5/S6.** 커널 writeback은 비용이 아니다 (S5는 유효). S6 부분은 docs/15→16 순으로 읽을 것 |
+| [16-apparatus-bug-io-cap.md](16-apparatus-bug-io-cap.md) | ⭐ **장치 버그.** io.max가 26% run에서 안 걸렸다 — 걸러내니 1/대역폭 법칙이 ±4%로 나옴 |
 | [15-s6v2-contradiction.md](15-s6v2-contradiction.md) | ⛔ **S6 재실험 72 run — "6.1배"가 재현 안 됨.** 양봉 현상, 규칙 2건 철회 |
 | [14-spill-anatomy.md](14-spill-anatomy.md) | **spill 해부.** "고정 136.5 MiB"의 정체 — 반올림 착시 + spill하는 task는 200개 중 하나 |
 
