@@ -21,6 +21,7 @@ UnsafeExternalSorter 를 통과하게 만든다. 즉 이 프로젝트가 보려�
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -58,7 +59,51 @@ def drop_caches():
         return False
 
 
-def _verify_io_cap(cap_mbps, pgpgout_delta_kb, wall_seconds):
+def redact(text):
+    """
+    결과 파일은 public 저장소에 그대로 올라간다. Spark 예외 메시지에는
+    실패한 executor 의 **사설 호스트명**이 박혀 있다
+    (`ip-<a>-<b>-<c>-<d>.<region>.compute.internal`). 분석에 아무 값어치가
+    없고 (실험은 전부 단일 노드다) VPC 주소 대역만 드러내므로 지운다.
+    """
+    if not text:
+        return text
+    return re.sub(r"ip-\d+-\d+-\d+-\d+(?:\.[a-z0-9.-]*compute\.internal)?",
+                  "<executor-host>", text)
+
+
+def read_cgroup_io_written():
+    """
+    이 프로세스가 속한 cgroup 이 **자기 이름으로** 디스크에 쓴 바이트.
+
+    왜 필요한가
+    ----------
+    /proc/vmstat 의 pgpgout 은 **시스템 전체** 값이다. 앞 run 이 남긴 writeback 이
+    이번 run 구간에 섞여 들어오므로, "이 run 이 cap 을 넘겼나"를 판정하는 데 쓰면
+    앞 run 의 쓰기까지 이번 run 탓으로 돌리게 된다. 실제로 이것 때문에
+    "io.max 가 26% 의 run 에서 안 걸렸다"는 결론을 냈다가 확신할 수 없게 됐다
+    (docs/16). cgroup 자기 io.stat 은 그 모호함이 없다.
+
+    반환: 전체 디바이스 합산 wbytes. cgroup v2 가 아니거나 io 컨트롤러가 없으면 None.
+    """
+    try:
+        with open("/proc/self/cgroup") as fh:
+            # cgroup v2 는 "0::/system.slice/..." 한 줄이다
+            rel = fh.read().strip().split("::")[-1]
+        path = os.path.join("/sys/fs/cgroup", rel.lstrip("/"), "io.stat")
+        total = 0
+        with open(path) as fh:
+            for line in fh:                      # "259:0 rbytes=.. wbytes=.. ..."
+                for field in line.split()[1:]:
+                    k, _, v = field.partition("=")
+                    if k == "wbytes":
+                        total += int(v)
+        return total
+    except Exception:
+        return None
+
+
+def _verify_io_cap(cap_mbps, pgpgout_delta_kb, wall_seconds, cgroup_written=None):
     """
     선언한 io.max 대역폭 상한이 이 run 에 실제로 걸렸는지 사후 검증한다.
 
@@ -73,16 +118,26 @@ def _verify_io_cap(cap_mbps, pgpgout_delta_kb, wall_seconds):
     cap 이 낮을수록 실패율이 높았다 (200MB/s 0% · 100MB/s 28% · 50MB/s 50%).
     이걸 못 보고 "같은 조건인데 결과가 양봉으로 갈린다"는 없는 결론을 냈다.
 
-    판정: run 전체 평균 쓰기 속도가 cap 의 1.5 배를 넘으면 미적용으로 본다.
+    판정 기준은 cgroup 자기 io.stat 을 우선한다 (모호하지 않다).
+    그게 없을 때만 시스템 전체 pgpgout 으로 대신한다 — 그 값은 앞 run 의
+    잔여 writeback 이 섞이므로 참고용이다.
     """
     if not cap_mbps or not wall_seconds:
-        return {"io_cap_applied": None, "avg_write_mbps": None}
-    avg = (pgpgout_delta_kb / 1024) / wall_seconds          # MiB/s
-    applied = avg <= cap_mbps * 1.5
+        return {"io_cap_applied": None, "avg_write_mbps": None,
+                "cgroup_write_mbps": None}
+
+    sys_avg = (pgpgout_delta_kb / 1024) / wall_seconds       # MiB/s, 시스템 전체
+    cg_avg = (cgroup_written / 2 ** 20 / wall_seconds) if cgroup_written else None
+
+    basis = cg_avg if cg_avg is not None else sys_avg
+    applied = basis <= cap_mbps * 1.5
     if not applied:
-        print(f"[run] WARN: io.max 미적용 의심 — 평균 쓰기 {avg:.1f} MB/s "
-              f"> cap {cap_mbps} MB/s. 이 run 은 사실상 무제한이다.", file=sys.stderr)
-    return {"io_cap_applied": applied, "avg_write_mbps": round(avg, 1)}
+        src = "cgroup io.stat" if cg_avg is not None else "system pgpgout(참고용)"
+        print(f"[run] WARN: io.max 미적용 의심 — {src} 기준 평균 쓰기 "
+              f"{basis:.1f} MB/s > cap {cap_mbps} MB/s.", file=sys.stderr)
+    return {"io_cap_applied": applied,
+            "avg_write_mbps": round(sys_avg, 1),
+            "cgroup_write_mbps": round(cg_avg, 1) if cg_avg is not None else None}
 
 
 def read_sysctl(path):
@@ -227,6 +282,7 @@ def main():
 
     from sampler import Sampler, snapshot
     pre = snapshot()
+    cg_pre = read_cgroup_io_written()
     sampler = Sampler(interval=args.sample_interval)
     sampler.start()
 
@@ -250,6 +306,8 @@ def main():
     sampler.stop()
     n_samples = sampler.to_csv(os.path.join(run_dir, "samples.csv"))
     post = snapshot()
+    cg_post = read_cgroup_io_written()
+    cg_written = (cg_post - cg_pre) if (cg_pre is not None and cg_post is not None) else None
 
     meta = {
         "run_id": args.run_id,
@@ -270,7 +328,7 @@ def main():
         "shuffle_compress": args.shuffle_compress,
         "rep": args.rep,
         "wall_seconds": round(wall, 3),
-        "error": err,
+        "error": redact(err),
         "dropped_caches": dropped,
         "n_samples": n_samples,
         # 커널 누적 카운터의 run 전후 차이 (delta 가 곧 이 run 이 유발한 양)
@@ -297,9 +355,10 @@ def main():
         # 스로틀이 조용히 무력화된다. 실제로 54 run 중 14 run(26%)이 그랬고,
         # 그 탓에 "양봉 현상"이라는 없는 결론을 냈다. docs/16 참조.
         # 그래서 run 마다 사후 검증한다: 평균 쓰기 속도가 cap 을 넘으면 미적용이다.
+        "cgroup_written_bytes": cg_written,
         **_verify_io_cap(args.io_cap_mbps,
                          post.get("vm_pgpgout", 0) - pre.get("vm_pgpgout", 0),
-                         wall),
+                         wall, cg_written),
         "peak_writeback_kb": max((r.get("mem_Writeback", 0) for r in sampler.rows), default=0),
     }
     with open(os.path.join(run_dir, "meta.json"), "w") as fh:
