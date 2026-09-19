@@ -22,6 +22,7 @@
 | [14-spill-anatomy.md](14-spill-anatomy.md) | **spill 해부.** "고정 136.5 MiB"의 정체 — 반올림 착시 + spill하는 task는 200개 중 하나 |
 | [17-s3-cores-and-cliff.md](17-s3-cores-and-cliff.md) | ⭐ **S3.** core 수와 cliff — 예측은 맞고 **근거는 틀렸다.** 첫 spill = 0.757×pool/N |
 | [18-s6-closing.md](18-s6-closing.md) | ⛔ **S6 종결.** io.max는 이 장비에서 ~50MB/s 이하에서만 계기로 쓸 수 있다 |
+| [19-s8-generalization.md](19-s8-generalization.md) | ⭐ **S8.** 결론이 `sort` 밖에서도 서는가 — **법칙은 일반화되고 상수는 안 된다** |
 | [20-blog-draft.md](20-blog-draft.md) | 기술 블로그 초안 (최종 산출물) |
 
 ## 현재 상태 (2026-09-19)
@@ -79,7 +80,18 @@
     첫 spill = 0.757 × pool / N — raw 바이트로 rep 간 5자리까지 일치
   - core 6 에서만 **OOM 2건**. 더 많은 core 의 대가는 "일찍 spill" 이 아니라 힙 사망
   - skew 8→32 이 6 core 확장성을 4.23× → 3.23× 로 **24% 깎는다**
-- ⬜ S7~S9 (미착수) · 최종 산출물: 블로그(`20-blog-draft.md`) / LinkedIn
+- ✅ **S8 완료** (99 run, 오류 0건) — **법칙은 일반화되고 상수는 안 된다**
+  - 계단 메커니즘은 join 에서 재현 (cliff 위치 동일: skew 16→24 사이)
+  - 그런데 **천장이 연산자마다 다르다** — sort **712.0** / join **616.1** MiB,
+    포화 구간 6 run 씩 소수점까지 동일 (SMJ 는 sorter 가 둘 — 추론)
+  - **1/N 법칙도 일반화.** 계수만 다르다: sort 0.757 / join **0.643**
+    (join 은 1c·2c·4c 에서 462.8 MiB 로 **퍼짐 0.0%**)
+  - 음성 대조군 `count` 통과 — 전 구간 평평(5.4s, peak 8 MiB, spill 0)
+  - ⚠️ `agg` 는 **판정 불가** — `peakExecutionMemory` 를 안 보고하고
+    partial aggregation 이 shuffle 을 20배 줄여 풀에 닿지도 않는다
+  - ⚠️ 레코드 지배는 sort 만 확인(+0.70s vs 산포 0.25s), join 은 산포에 묻혐다.
+    1741 ns/record 가 과대예측하는 것까지 **S4 의 한계를 독립 재현**했다
+- ⬜ S7·S9 미착수 (S9 PMU 는 권장 안 함) · 최종 산출물: 블로그(`20-blog-draft.md`) / LinkedIn
 
 ## 빠른 시작
 
