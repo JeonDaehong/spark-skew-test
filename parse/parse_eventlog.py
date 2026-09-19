@@ -14,6 +14,7 @@ import csv
 import glob
 import json
 import os
+import re
 import statistics
 import sys
 
@@ -65,6 +66,96 @@ def parse_aqe(path):
                 found["aqe_read_coalesced"] = True
     found["aqe_split_detected"] = found["smj_skew"] or found["aqe_read_skewed"]
     return found
+
+
+def parse_agg_fallback(path):
+    """
+    ObjectHashAggregate 가 sort-based 로 폴백했는지 이벤트로그에서 직접 확인한다.
+
+    왜 필요한가
+    ----------
+    `spark.sql.objectHashAggregate.sortBased.fallbackThreshold` 를 건드리는 개입을
+    한다. **개입이 걸렸다는 것을 개입 자체보다 먼저 검증해야 한다** (S6 에서 세 번
+    데인 교훈). 태스크 시간으로 추정하면 안 된다. Spark 가 직접 내주는 메트릭이 있다.
+
+    왜 reduce 스테이지만 보는가
+    --------------------------
+    이 임계값은 **맵에 들어온 키 개수**를 센다 (바이트가 아니다). map-side 부분집계는
+    입력 split 하나에서 전체 키(수만 개)를 보므로 거의 항상 폴백한다. 반면 reduce
+    스테이지는 파티션당 키가 적어 폴백하지 않는다. 우리가 보려는 hot 파티션은
+    reduce 쪽에 있으므로 **전체 합계를 보면 map-side 폴백에 가려 정반대로 읽힌다.**
+    실측: s8 의 agg skew32 는 stage1 67/81 폴백, stage2 0/200 폴백이었다.
+
+    반환
+    ----
+      agg_op                    물리 플랜의 집계 연산자 이름
+      has_peak_mem_metric       이 플랜이 "peak memory" 메트릭을 내주는가
+                                (ObjectHashAggregate 는 안 내준다 — 0 은 '안 썼다'가
+                                 아니라 '안 보인다'라는 뜻)
+      agg_fallback_reduce       reduce 스테이지에서 폴백한 태스크 수
+      agg_fallback_reduce_total reduce 스테이지 태스크 수
+      agg_fallback_hot          hot 태스크(shuffle read 최대)가 폴백했는가 (0/1)
+      agg_fallback_all          전 스테이지 합계 (참고용)
+    """
+    out = {"agg_op": None, "has_peak_mem_metric": False,
+           "agg_fallback_reduce": None, "agg_fallback_reduce_total": None,
+           "agg_fallback_hot": None, "agg_fallback_all": None}
+
+    acc_ids = set()
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            if '"name":"peak memory"' in line:
+                out["has_peak_mem_metric"] = True
+            if out["agg_op"] is None:
+                if "ObjectHashAggregate" in line:
+                    out["agg_op"] = "ObjectHashAggregate"
+                elif "HashAggregate" in line:
+                    out["agg_op"] = "HashAggregate"
+            if "sort fallback tasks" in line:
+                acc_ids.update(int(m) for m in re.findall(
+                    r'"name":"number of sort fallback tasks","accumulatorId":(\d+)', line))
+    if not acc_ids:
+        return out
+
+    # 태스크별로 (스테이지, 폴백여부, shuffle read) 를 모은다.
+    per_stage = {}          # sid -> [fallback_tasks, total_tasks, read_bytes]
+    hot = None              # (read_bytes, sid, fallback)
+    total = 0
+    with open(path, errors="replace") as fh:
+        for line in fh:
+            if '"Event":"SparkListenerTaskEnd"' not in line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            sid = ev.get("Stage ID")
+            fb = 0
+            for a in (ev.get("Task Info") or {}).get("Accumulables", []) or []:
+                if a.get("ID") in acc_ids:
+                    try:
+                        fb += int(a.get("Update") or 0)
+                    except (TypeError, ValueError):
+                        pass
+            total += fb
+            srm = (ev.get("Task Metrics") or {}).get("Shuffle Read Metrics") or {}
+            read = srm.get("Remote Bytes Read", 0) + srm.get("Local Bytes Read", 0)
+            st = per_stage.setdefault(sid, [0, 0, 0])
+            st[0] += 1 if fb else 0
+            st[1] += 1
+            st[2] += read
+            if read and (hot is None or read > hot[0]):
+                hot = (read, sid, 1 if fb else 0)
+
+    out["agg_fallback_all"] = total
+    if hot is not None:
+        # reduce 스테이지 = shuffle 을 읽은 스테이지 중 가장 많이 읽은 것
+        rid = max((sid for sid, v in per_stage.items() if v[2] > 0),
+                  key=lambda sid: per_stage[sid][2])
+        out["agg_fallback_reduce"] = per_stage[rid][0]
+        out["agg_fallback_reduce_total"] = per_stage[rid][1]
+        out["agg_fallback_hot"] = hot[2]
+    return out
 
 
 def parse_tasks(path):
@@ -212,6 +303,7 @@ def process_run(run_dir, write_tasks=True):
 
     meta.update(summarize(tasks))
     meta.update(parse_aqe(elog))
+    meta.update(parse_agg_fallback(elog))
     with open(os.path.join(run_dir, "summary.json"), "w") as fh:
         json.dump(meta, fh, indent=2)
     return meta

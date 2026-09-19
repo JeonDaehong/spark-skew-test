@@ -47,6 +47,14 @@ set -euo pipefail
 source ~/.spark-skew-env
 cd "$(dirname "$0")/.."
 
+# --- 완료 표식 (env/ec2-sync.sh wait 가 이걸 본다) -------------------------
+# pgrep 으로 생사를 추정하면 안 된다: `pgrep -f x_sweep.sh` 는 자기 명령줄에도
+# 매칭돼서 끝나도 RUNNING 을 반환한다. 그 버그로 결과를 통째로 잃은 적이 있다.
+# 정상 종료든 실패든 반드시 표식을 남긴다 (trap) — 안 그러면 wait 가 매달린다.
+_DONE_MARK="/home/ubuntu/.$(basename "$0").done"
+rm -f "$_DONE_MARK"
+trap 'echo "exit=$?" > "$_DONE_MARK"' EXIT
+
 GB=${GB:-8}
 RB=${RB:-256}
 P=${P:-200}

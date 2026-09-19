@@ -205,10 +205,54 @@ def workload(spark, args):
                  .sortWithinPartitions("key", "payload"))
     elif args.workload == "agg":
         # collect_list 는 비대수적이라 map-side combine 으로 접히지 않는다.
+        #
+        # 주의: substring 으로 8 바이트만 모은다. 256B 행이 8B 가 되므로 shuffle 이
+        # 32 배 줄어든다. S8 에서 이걸 놓쳐서 "집계는 계단이 없다"로 읽을 뻔했다 —
+        # 실제로는 hot 파티션이 1054 MiB 가 아니라 52 MiB 였다. 풀 근처도 안 갔다.
+        # 같은 규모로 비교하려면 agg_wide 를 쓸 것.
         out = df.groupBy("key").agg(
             F.count(F.lit(1)).alias("n"),
             F.collect_list(F.substring("payload", 1, 8)).alias("sample"),
         )
+    elif args.workload == "agg_wide":
+        # agg 와 같은데 payload 를 자르지 않는다. hot 파티션 크기가 sort/join 과
+        # 같아져서 "같은 입력, 다른 연산자" 비교가 성립한다.
+        #
+        # 여기서 보려는 것
+        # ----------------
+        # ObjectHashAggregate 의 sort-based 폴백 임계값
+        # (spark.sql.objectHashAggregate.sortBased.fallbackThreshold, 기본 128) 은
+        # **맵에 들어온 키 개수**를 센다. 바이트가 아니다.
+        # hot 파티션에는 키가 사실상 하나뿐이라 임계값에 영원히 안 걸린다.
+        # => 폴백이 안 일어나고, 실행 메모리 풀 밖의 평범한 JVM 맵에 다 쌓인다.
+        # => sort/join 을 구해주는 spill 이라는 안전밸브가 여기엔 없다.
+        #
+        # 예측: spill 0 을 유지하다가 어느 skew 에서 spill 없이 바로 OOM.
+        # 대조: --extra-conf 로 fallbackThreshold=0 을 주면 즉시 폴백 ->
+        #       UnsafeExternalSorter -> spill 하며 살아남아야 한다.
+        out = df.groupBy("key").agg(
+            F.count(F.lit(1)).alias("n"),
+            F.collect_list("payload").alias("rows"),
+        )
+    elif args.workload == "window":
+        # 키별 윈도우 — 현장에서 skew 로 제일 자주 터지는 "키별 중복 제거 / top-N" 패턴.
+        #
+        # 왜 이걸 집계 대신 쓰는가
+        # -----------------------
+        # groupBy 계열로는 계단을 잴 수 없다는 것이 S8b 스모크에서 드러났다:
+        #   - 축약 가능한 집계(count, sum)는 map-side combine 이 hot 파티션을
+        #     reduce 에 도달하기 전에 없애버린다. 계단이 생길 수가 없다.
+        #   - 축약 불가능한 집계(collect_list of raw rows)는 hot key 의 **출력 한 행**이
+        #     1.15 GB 가 되어 힙보다 커진다. "풀을 넘었다"와 "출력이 너무 크다"를
+        #     분리할 수 없다.
+        #
+        # window 는 그 둘을 피한다: hot 파티션 전체가 reduce 태스크에 그대로 오고
+        # (축약 없음), 출력은 입력 행마다 한 행이라 **경계가 있다**.
+        # WindowExec 는 UnsafeExternalSorter 를 쓰므로 spill 이라는 안전밸브가 있다.
+        # => sort/join 과 같은 계단이 나와야 한다.
+        from pyspark.sql.window import Window
+        w = Window.partitionBy("key").orderBy("payload")
+        out = df.withColumn("rn", F.row_number().over(w))
     elif args.workload == "count":
         # 대조군: partial aggregation 이 skew 를 흡수해버리는 것을 보여주기 위한 워크로드
         out = df.groupBy("key").agg(F.count(F.lit(1)).alias("n"))
@@ -231,7 +275,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="gen/make_skewed.py 가 만든 parquet 경로")
     ap.add_argument("--workload", default="sort",
-                    choices=["sort", "agg", "count", "join"])
+                    choices=["sort", "agg", "agg_wide", "window", "count", "join"])
     ap.add_argument("--dim-keys", type=int, default=10001,
                     help="join 워크로드의 디멘션 키 개수 (cold_keys + hot key 0)")
     ap.add_argument("--cores", default="4")
@@ -241,6 +285,10 @@ def main():
     ap.add_argument("--codec", default="lz4", choices=["lz4", "zstd", "snappy", "lzf"])
     ap.add_argument("--shuffle-compress", type=lambda s: s.lower() == "true", default=True)
     ap.add_argument("--extra-conf", action="append", default=[])
+    ap.add_argument("--label", default="",
+                    help="run_id 와 summary 에 붙는 자유 라벨. --extra-conf 로 건 개입은 "
+                         "run_id 에 안 나타나므로, 개입군/대조군을 구분하려면 이걸 써야 한다. "
+                         "안 쓰면 두 군의 run_id 가 같아져서 집계에서 섞인다.")
     # 라벨 (분석에서 축으로 쓰임)
     ap.add_argument("--skew", type=float, required=True)
     ap.add_argument("--row-bytes", type=int, required=True)
@@ -262,9 +310,10 @@ def main():
     results_root = args.results or os.path.join(repo, "results")
     mode_tag = "rec" if args.skew_mode == "record" else "byt"
     skew_tag = args.record_skew if args.skew_mode == "record" else args.skew
+    label_tag = f"_{args.label}" if args.label else ""
     args.run_id = (f"{args.tag}_{mode_tag}{skew_tag:g}_rb{args.row_bytes}_c{args.cores}"
                    f"_m{args.exec_mem}_p{args.partitions}_aqe{int(args.aqe)}"
-                   f"_{args.workload}_rep{args.rep}")
+                   f"_{args.workload}{label_tag}_rep{args.rep}")
     run_dir = os.path.join(results_root, args.tag, args.run_id + "_" + uuid.uuid4().hex[:6])
     os.makedirs(run_dir, exist_ok=True)
     eventlog_dir = os.path.join(run_dir, "eventlog")
@@ -315,6 +364,8 @@ def main():
         "tag": args.tag,
         "input": args.input,
         "workload": args.workload,
+        "label": args.label,
+        "extra_conf": ";".join(args.extra_conf),
         "skew": args.skew,
         "skew_mode": args.skew_mode,
         "io_cap_mbps": args.io_cap_mbps,
