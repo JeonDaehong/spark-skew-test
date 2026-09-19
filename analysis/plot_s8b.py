@@ -71,12 +71,17 @@ def main():
     axA.legend(fontsize=8); axA.grid(alpha=.3)
 
     # --- B. peak exec mem (핵심) ----------------------------------------
-    for arm in ["window", "sort"]:
-        s = agg(df, arm, "peak_exec_mem_max") / MB
-        axB.plot(s.index, s.values, "o-", color=COLORS[arm], label=arm)
-        axB.annotate(f"{s.iloc[-1]:.1f}", (s.index[-1], s.iloc[-1]),
-                     textcoords="offset points", xytext=(6, -3),
-                     fontsize=9, color=COLORS[arm])
+    # 두 곡선의 값이 **모든 점에서 완전히 같다**. 그냥 겹쳐 그리면 하나가 다른
+    # 하나를 가려서 "window 가 빠졌나?" 로 읽힌다. 굵은 실선 위에 점선을 얹는다.
+    bw = agg(df, "window", "peak_exec_mem_max") / MB
+    bs = agg(df, "sort", "peak_exec_mem_max") / MB
+    axB.plot(bw.index, bw.values, "o-", lw=5, alpha=.45,
+             color=COLORS["window"], label="window")
+    axB.plot(bs.index, bs.values, "o--", lw=1.6, ms=4,
+             color=COLORS["sort"], label="sort (identical)")
+    axB.annotate(f"{bs.iloc[-1]:.1f} MiB\nboth, 6 runs each",
+                 (bs.index[-1], bs.iloc[-1]), textcoords="offset points",
+                 xytext=(-8, -34), ha="right", fontsize=8, color=theme["ink"])
     axB.axhline(POOL_MIB, ls="--", lw=1, color=theme["ink2"])
     axB.text(df["skew"].min(), POOL_MIB, " execution pool 720 MiB",
              va="bottom", fontsize=8, color=theme["ink2"])
@@ -92,39 +97,44 @@ def main():
     axC.set_xlabel("skew"); axC.set_ylabel("spill (MiB)")
     axC.legend(fontsize=8); axC.grid(alpha=.3)
 
-    # --- D. agg_wide 의 운명 ---------------------------------------------
-    skews = sorted(df["skew"].unique())
-    width = 0.35
-    for i, arm in enumerate(["base", "fb0"]):
-        sub = df[df["_arm"] == arm]
+    # --- D. 어디까지 버티는가 -------------------------------------------
+    # 처음엔 팔별 spill 막대를 그리려 했는데 그러면 거짓말이 된다:
+    # 실패한 agg_wide run 은 **reduce 스테이지에 도달조차 못 했다** (전부 stage 1
+    # map-side 부분집계에서 사망). reduce task 가 없으니 spill 집계가 0 으로 남는데,
+    # 그건 "spill 안 했다"가 아니라 "잴 게 없었다"이다. 증거로 쓸 수 없다.
+    #
+    # 대신 정직하게 잴 수 있는 것을 그린다:
+    #   **성공한 run 중 가장 큰 hot 파티션** = 그 연산자가 버텨낸 한계.
+    ok = df[df["error"].isna()]
+    arms = ["sort", "window", "base", "fb0"]
+    names = {"sort": "sort", "window": "window",
+             "base": "collect_list\n(default)", "fb0": "collect_list\n(forced\nfallback)"}
+    xs, ys, cs, labels = [], [], [], []
+    for i, a in enumerate(arms):
+        sub = ok[ok["_arm"] == a]
         if sub.empty:
             continue
-        xs, spills, died = [], [], []
-        for j, sk in enumerate(skews):
-            rs = sub[sub["skew"] == sk]
-            if rs.empty:
-                continue
-            xs.append(j + (i - 0.5) * width)
-            spills.append(rs["spill_disk_total"].mean() / MB)
-            died.append(bool(rs["error"].notna().any()))
-        axD.bar(xs, spills, width, color=COLORS[arm], alpha=.85,
-                label=f"agg_wide ({arm})")
-        top = max(spills) if spills else 1
-        for x, sp, d in zip(xs, spills, died):
-            axD.annotate("OOM" if d else "ok", (x, sp),
-                         textcoords="offset points", xytext=(0, 4),
-                         ha="center", fontsize=8,
-                         color=theme["ink"] if d else theme["ink2"],
-                         fontweight="bold" if d else "normal")
-    axD.set_xticks(range(len(skews)))
-    axD.set_xticklabels(skews)
-    axD.set_title("D. agg_wide — collect_list(payload)\n"
-                  "failure is the result: no valve (base) vs valve but still dies (fb0)")
-    axD.set_xlabel("skew"); axD.set_ylabel("spill (MiB)")
-    axD.legend(fontsize=8); axD.grid(alpha=.3, axis="y")
+        xs.append(i)
+        ys.append(sub["sr_bytes_max"].max() / MB)
+        cs.append(COLORS[a])
+        labels.append(names[a])
+    axD.bar(xs, ys, 0.6, color=cs, alpha=.88)
+    for x, y in zip(xs, ys):
+        axD.annotate(f"{y:,.0f} MiB", (x, y), textcoords="offset points",
+                     xytext=(0, 4), ha="center", fontsize=9, fontweight="bold")
+    axD.axhline(POOL_MIB, ls="--", lw=1, color=theme["ink2"])
+    axD.text(len(xs) - 0.4, POOL_MIB, "pool 720 MiB", va="bottom", ha="right",
+             fontsize=8, color=theme["ink2"])
+    axD.set_xticks(xs); axD.set_xticklabels(labels, fontsize=9)
+    axD.set_ylim(0, max(ys) * 1.25)
+    axD.set_title("D. largest hot partition that finished\n"
+                  "same input, same 720 MiB pool")
+    axD.set_ylabel("hot partition (MiB)")
+    axD.grid(alpha=.3, axis="y")
 
-    fig.suptitle("S8b — where the cliff appears, and where the safety valve is missing   "
-                 f"({n_all} runs, {n_err} failed by design)", fontsize=13)
+    fig.suptitle("S8b — does the cliff generalize beyond sort?   "
+                 f"({n_all} runs, {n_err} failed — all in map-side partial aggregation)",
+                 fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, .96))
 
     outdir = os.path.join(root, args.tag, "figures")

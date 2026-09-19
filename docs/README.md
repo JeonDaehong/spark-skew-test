@@ -23,6 +23,7 @@
 | [17-s3-cores-and-cliff.md](17-s3-cores-and-cliff.md) | ⭐ **S3.** core 수와 cliff — 예측은 맞고 **근거는 틀렸다.** 첫 spill = 0.757×pool/N |
 | [18-s6-closing.md](18-s6-closing.md) | ⛔ **S6 종결.** io.max는 이 장비에서 ~50MB/s 이하에서만 계기로 쓸 수 있다 |
 | [19-s8-generalization.md](19-s8-generalization.md) | ⭐ **S8.** 결론이 `sort` 밖에서도 서는가 — **법칙은 일반화되고 상수는 안 된다** |
+| [21-s8b-per-key-ops.md](21-s8b-per-key-ops.md) | ⭐ **S8b.** window 도 같은 천장(712.0). 집계는 왜 못 재는지 확정 |
 | [20-blog-draft.md](20-blog-draft.md) | 기술 블로그 초안 (최종 산출물) |
 
 ## 현재 상태 (2026-09-19)
@@ -91,6 +92,22 @@
     partial aggregation 이 shuffle 을 20배 줄여 풀에 닿지도 않는다
   - ⚠️ 레코드 지배는 sort 만 확인(+0.70s vs 산포 0.25s), join 은 산포에 묻혐다.
     1741 ns/record 가 과대예측하는 것까지 **S4 의 한계를 독립 재현**했다
+- ✅ **S8b 완료** (32 run) — S8 이 남긴 `agg` 구멍을 닫았다 (`docs/21`)
+  - **`window`(row_number)가 sort 와 똑같은 천장 712.0 MiB** — 12 run 전부 단일값.
+    천장은 워크로드가 아니라 **어떤 메모리 소비자를 쓰느냐**가 정한다
+  - 다만 **spill 양은 일반화 안 된다**: skew 32 에서 window 1,529 vs sort 689 MiB.
+    cliff 도 window 16 / sort 24 로 갈린다 (sorter 왕복 — **추론**)
+  - ⛔ **집계의 계단은 이 하네스로 측정 불가 — 이유 확정**:
+    축약 가능한 집계는 map-side 에서 hot 파티션이 사라지고, 축약 불가능한
+    집계(`collect_list`)는 **출력 한 행이 1.15 GB** 라 힙을 넘는다. 그 사이가 없다
+  - ⚠️ 실패 6건은 전부 stage 1 에서 났으므로 그 run 들의 `spill=0` 은
+    **증거가 아니다** (reduce task 가 없어서 0)
+  - 실무: 같은 입력에서 sort/window 는 **1,054 MiB**, `collect_list` 는 **293 MiB** 에서 멈춘다
+- ⚠️ **하네스 버그로 S8b 를 한 번 통째로 잃었다** (`bba2377`)
+  - 대기 스크립트의 `pgrep -f <sweep>.sh` 가 **자기 명령줄에도 매칭**돼서
+    스윕이 끝나도 영원히 RUNNING → pull 안 함 → 60분 유휴 watchdog 이 종료
+  - 고침: `env/ec2-sync.sh wait <sweep>` — **완료 표식 파일** 1순위 +
+    대괄호 트릭 + **5분마다 중간 회수**. 스윕 8개 전부에 trap 표식 추가
 - ⬜ S7·S9 미착수 (S9 PMU 는 권장 안 함) · 최종 산출물: 블로그(`20-blog-draft.md`) / LinkedIn
 
 ## 빠른 시작
