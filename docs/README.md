@@ -25,6 +25,8 @@
 | [19-s8-generalization.md](19-s8-generalization.md) | ⭐ **S8.** 결론이 `sort` 밖에서도 서는가 — **법칙은 일반화되고 상수는 안 된다** |
 | [21-s8b-per-key-ops.md](21-s8b-per-key-ops.md) | ⭐ **S8b.** window 도 같은 천장(712.0). 집계는 왜 못 재는지 확정 |
 | [23-s11-practical.md](23-s11-practical.md) | ⭐ **S11/S11b 실무 편.** broadcast 경계·AQE 유효구간·salting 패배·NULL key |
+| [24-linkedin.md](24-linkedin.md) | **LinkedIn 포스트.** 전체요약(A) / AQE 사각지대만(B, 추천) |
+| [25-spark-jira-draft.md](25-spark-jira-draft.md) | **Spark JIRA 초안.** 제출 전 — dev@ 먼저 권장 |
 | [22-blog-post.md](22-blog-post.md) | ⭐ **기술 블로그 최종 원고.** 개인 블로그 형식(서론/본론/결론+부록) |
 | [20-blog-draft.md](20-blog-draft.md) | 블로그 작업 초안 (발견 7개 나열식) — 22 의 재료 |
 
@@ -122,6 +124,7 @@
   - ❌ **파티션 수 늘리기 무효** (음성 대조군): 200→2000 에서 hot 525.9→512.0 MiB (2.6%)
   - **NULL key**: inner 는 `PushedFilters: [IsNotNull(key)]` 로 셔플 전에 털어내고
     outer 는 못 턴다 → hot **59.4배**(19.4 vs 1,155.6 MiB), 시간 1.53배. 플랜으로 확인
+- ✅ **최종 산출물 3종 초안 완료** — 블로그(`22`) / LinkedIn(`24`) / JIRA(`25`)
 - ⬜ S7·S9 미착수 (S9 PMU 는 권장 안 함) · 최종 산출물: 블로그(`20-blog-draft.md`) / LinkedIn
 
 ## 빠른 시작
