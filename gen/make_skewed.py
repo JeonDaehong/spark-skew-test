@@ -190,7 +190,7 @@ def build_record_skew(spark, *, total_bytes, hot_row_bytes, cold_row_bytes,
 
 
 def build(spark, *, total_bytes, row_bytes, skew, partitions, cold_keys,
-          out_path, compression, seed, scratch):
+          out_path, compression, seed, scratch, null_fraction=0.0):
     f = hot_fraction(skew, partitions)
     pad_bytes = max(0, row_bytes - FIXED_COL_BYTES)
     # sha2(...,256) 은 64 hex chars. 필요한 길이만큼 반복 후 잘라 쓴다.
@@ -217,7 +217,10 @@ def build(spark, *, total_bytes, row_bytes, skew, partitions, cold_keys,
             rows_per_file=max(1, est_rows // n_files))
     n_rows = int(total_bytes / bpr)
     n_hot = int(n_rows * f)
-    n_cold = n_rows - n_hot
+    # NULL key 는 실무에서 제일 흔한 skew 형태다. 해시 파티셔닝에서 NULL 은
+    # **전부 같은 파티션**으로 간다. hot key 와 같은 구조인데 키가 없을 뿐이다.
+    n_null = int(n_rows * null_fraction)
+    n_cold = n_rows - n_hot - n_null
 
     print(f"[gen] calibrated {bpr:.1f} bytes/row (nominal {row_bytes}) "
           f"-> rows={n_rows:,} for {total_bytes/2**30:.2f}GiB")
@@ -243,6 +246,16 @@ def build(spark, *, total_bytes, row_bytes, skew, partitions, cold_keys,
     else:
         df = cold
 
+    if n_null > 0:
+        nulls = (
+            spark.range(0, n_null, numPartitions=partitions)
+            .withColumn("key", F.lit(None).cast("int"))
+            .withColumn("payload", payload(F.col("id")))
+            .select("key", "payload")
+        )
+        df = df.unionAll(nulls)
+        print(f"[gen] null_fraction={null_fraction} -> null_rows={n_null:,}")
+
     t0 = time.time()
     (df.write
        .mode("overwrite")
@@ -261,6 +274,8 @@ def build(spark, *, total_bytes, row_bytes, skew, partitions, cold_keys,
         "hot_fraction": f,
         "n_hot": n_hot,
         "n_cold": n_cold,
+        "n_null": n_null,
+        "null_fraction": null_fraction,
         "compression": compression,
         "seed": seed,
         "bytes_per_row_measured": round(bpr, 2),
@@ -272,6 +287,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--total-gb", type=float, default=2.0,
                     help="총 데이터 크기(GiB). 모든 실험에서 고정해야 한다.")
+    ap.add_argument("--null-fraction", type=float, default=0.0,
+                    help="key 가 NULL 인 행의 비율. NULL 은 해시 파티셔닝에서 "
+                         "전부 한 파티션으로 몰린다 — 실무에서 제일 흔한 skew")
     ap.add_argument("--row-bytes", type=int, default=256,
                     help="row 폭(bytes). bytes 고정 상태로 record 수를 바꾸는 통제변수.")
     ap.add_argument("--skew", type=float, default=1.0,
@@ -350,6 +368,7 @@ def main():
                 compression=args.compression,
                 seed=args.seed,
                 scratch=args.scratch,
+                null_fraction=args.null_fraction,
             )
     finally:
         spark.stop()

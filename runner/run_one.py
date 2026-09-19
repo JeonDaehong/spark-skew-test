@@ -256,6 +256,56 @@ def workload(spark, args):
     elif args.workload == "count":
         # 대조군: partial aggregation 이 skew 를 흡수해버리는 것을 보여주기 위한 워크로드
         out = df.groupBy("key").agg(F.count(F.lit(1)).alias("n"))
+    elif args.workload in ("join_bc", "join_salt",
+                           "join_isolate", "join_left"):
+        # --- 실무 편 워크로드 (S11) -------------------------------------
+        # dim 을 키 개수로 키운다. fact 의 키 범위(0..cold_keys)를 넘는 행은
+        # 매칭되지 않는데, 그게 현실이다 — 디멘션은 보통 참조되는 것보다 크다.
+        pad = max(0, args.dim_row_bytes - 16)
+        dim = (spark.range(0, args.dim_keys)
+               .selectExpr("cast(id as int) as key",
+                           f"rpad(concat('d', cast(id as string)), {pad}, 'x') as dim_val"))
+
+        if args.workload == "join_isolate":
+            # hot key 분리 처리 — AQE 도 salting 도 못 쓸 때의 수동 해법.
+            #
+            #   hot key 만 떼어 broadcast join (셔플 없음)
+            #   나머지는 평소대로 SortMergeJoin
+            #   둘을 union
+            #
+            # 생성기에서 hot key 는 항상 0 이고 cold 는 1..cold_keys 다.
+            # dim 에서 hot 쪽은 한 행뿐이라 broadcast 가 공짜다 — **이게 요점이다.**
+            # salting 과 달리 dim 을 복제하지 않는다.
+            hot = df.filter(F.col("key") == F.lit(args.hot_key))
+            cold = df.filter(F.col("key") != F.lit(args.hot_key))
+            dim_hot = dim.filter(F.col("key") == F.lit(args.hot_key))
+            out = (cold.join(dim, "key")
+                       .unionByName(hot.join(F.broadcast(dim_hot), "key")))
+        elif args.workload == "join_left":
+            # NULL key 확인용. inner join 은 Spark 가 조인 키에 isnotnull 을
+            # 자동으로 끼워넣어 NULL 을 미리 털어낼 수 있다 (InferFiltersFromConstraints).
+            # left outer 는 NULL 행을 **버릴 수 없으므로** 그 최적화가 막힌다.
+            # 둘을 나란히 재면 "Spark 가 알아서 해주는가"의 답이 나온다.
+            out = df.join(dim, "key", "left")
+        elif args.workload == "join_bc":
+            # broadcast 를 **명시적으로 강제**한다. 세션 설정의
+            # autoBroadcastJoinThreshold=-1 보다 힌트가 우선한다.
+            # dim 이 커지면 driver 가 전부 모아서 executor 로 뿌려야 하므로
+            # 어느 크기부터 터지는지를 본다. 터지는 것이 결과다.
+            out = df.join(F.broadcast(dim), "key")
+        else:
+            # salting: hot key 를 salt 개로 쪼개 여러 파티션에 흩는다.
+            #   fact 쪽은 키마다 무작위 salt 를 붙이고,
+            #   dim 쪽은 같은 행을 salt 개로 복제해 모든 salt 와 매칭되게 한다.
+            # dim 이 salt 배로 커지는 것이 이 기법의 대가다.
+            n = max(1, args.salt)
+            fact_s = df.withColumn(
+                "_k", F.concat_ws("#", F.col("key"),
+                                  (F.rand(seed=42) * n).cast("int")))
+            dim_s = (dim.withColumn("_s", F.explode(F.sequence(F.lit(0), F.lit(n - 1))))
+                        .withColumn("_k", F.concat_ws("#", F.col("key"), F.col("_s")))
+                        .drop("_s", "key"))
+            out = fact_s.join(dim_s, "_k")
     elif args.workload == "join":
         # AQE 의 skewJoin 은 SortMergeJoin 에만 적용된다. sort 워크로드로는
         # skew 분할 자체가 일어나지 않아 P3 를 검증할 수 없다.
@@ -275,9 +325,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True, help="gen/make_skewed.py 가 만든 parquet 경로")
     ap.add_argument("--workload", default="sort",
-                    choices=["sort", "agg", "agg_wide", "window", "count", "join"])
+                    choices=["sort", "agg", "agg_wide", "window", "count",
+                             "join", "join_bc", "join_salt",
+                             "join_isolate", "join_left"])
     ap.add_argument("--dim-keys", type=int, default=10001,
                     help="join 워크로드의 디멘션 키 개수 (cold_keys + hot key 0)")
+    ap.add_argument("--dim-row-bytes", type=int, default=32,
+                    help="디멘션 행 폭. dim 크기 ~= dim_keys x dim_row_bytes. "
+                         "broadcast 가 어디서 터지는지 보려고 키운다")
+    ap.add_argument("--hot-key", type=int, default=0,
+                    help="join_isolate 가 따로 뺄 키. 생성기의 hot key 는 항상 0")
+    ap.add_argument("--salt", type=int, default=0,
+                    help="join_salt 에서 hot key 를 쪼갤 개수. dim 이 이 배수만큼 커진다")
     ap.add_argument("--cores", default="4")
     ap.add_argument("--exec-mem", default="2g")
     ap.add_argument("--partitions", type=int, default=200)
@@ -365,6 +424,10 @@ def main():
         "input": args.input,
         "workload": args.workload,
         "label": args.label,
+        "dim_keys": args.dim_keys,
+        "dim_row_bytes": args.dim_row_bytes,
+        "dim_mb_est": round(args.dim_keys * args.dim_row_bytes / 2 ** 20, 1),
+        "salt": args.salt,
         "extra_conf": ";".join(args.extra_conf),
         "skew": args.skew,
         "skew_mode": args.skew_mode,

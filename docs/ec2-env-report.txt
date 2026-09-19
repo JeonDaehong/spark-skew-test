@@ -20,21 +20,21 @@ NAME           SIZE ROTA TYPE MOUNTPOINT
 loop0         28.4M    0 loop /snap/amazon-ssm-agent/13349
 loop1           74M    0 loop /snap/core22/2437
 loop2         50.1M    0 loop /snap/snapd/27710
+nvme1n1      884.8G    0 disk /data
 nvme0n1         60G    0 disk 
 ├─nvme0n1p1     59G    0 part /
 ├─nvme0n1p14     4M    0 part 
 ├─nvme0n1p15   106M    0 part /boot/efi
 └─nvme0n1p16   913M    0 part /boot
-nvme1n1      884.8G    0 disk /data
 + echo '## PSI'
 ## PSI
 + cat /proc/pressure/io
-some avg10=7.17 avg60=7.94 avg300=3.15 total=10323270
-full avg10=7.17 avg60=7.90 avg300=3.14 total=10281908
+some avg10=10.45 avg60=9.74 avg300=3.74 total=13512137
+full avg10=10.45 avg60=9.72 avg300=3.73 total=13475040
 + echo '## BTF'
 ## BTF
 + ls -la /sys/kernel/btf/vmlinux
--r--r--r-- 1 root root 7156744 Sep 19 06:34 /sys/kernel/btf/vmlinux
+-r--r--r-- 1 root root 7156744 Sep 19 07:52 /sys/kernel/btf/vmlinux
 + echo '## CGROUP'
 ## CGROUP
 + stat -fc %T /sys/fs/cgroup

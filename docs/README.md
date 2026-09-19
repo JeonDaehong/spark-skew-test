@@ -24,7 +24,8 @@
 | [18-s6-closing.md](18-s6-closing.md) | ⛔ **S6 종결.** io.max는 이 장비에서 ~50MB/s 이하에서만 계기로 쓸 수 있다 |
 | [19-s8-generalization.md](19-s8-generalization.md) | ⭐ **S8.** 결론이 `sort` 밖에서도 서는가 — **법칙은 일반화되고 상수는 안 된다** |
 | [21-s8b-per-key-ops.md](21-s8b-per-key-ops.md) | ⭐ **S8b.** window 도 같은 천장(712.0). 집계는 왜 못 재는지 확정 |
-| [22-blog-post.md](22-blog-post.md) | ⭐ **기술 블로그 최종 원고.** daehong770.me.kr 스타일(서론/본론/결론+부록) |
+| [23-s11-practical.md](23-s11-practical.md) | ⭐ **S11/S11b 실무 편.** broadcast 경계·AQE 유효구간·salting 패배·NULL key |
+| [22-blog-post.md](22-blog-post.md) | ⭐ **기술 블로그 최종 원고.** 개인 블로그 형식(서론/본론/결론+부록) |
 | [20-blog-draft.md](20-blog-draft.md) | 블로그 작업 초안 (발견 7개 나열식) — 22 의 재료 |
 
 ## 현재 상태 (2026-09-19)
@@ -109,6 +110,18 @@
     스윕이 끝나도 영원히 RUNNING → pull 안 함 → 60분 유휴 watchdog 이 종료
   - 고침: `env/ec2-sync.sh wait <sweep>` — **완료 표식 파일** 1순위 +
     대괄호 트릭 + **5분마다 중간 회수**. 스윕 8개 전부에 trap 표식 추가
+- ✅ **S11 / S11b 완료** (108 run) — **무엇이 듣고 무엇이 안 듣는가** (`docs/23`)
+  - **broadcast**: 286 MiB 까지 2.4배, 286~572 MiB 사이에서 OOM (driver 1500m)
+  - **AQE**: skew 32 에서 1.20배. 단 **두 조건 AND** 라 hot < 256MB 면 무반응
+    (1 GiB 데이터는 skew 50 에서도 hot 189.7 MiB → 손 안 댐)
+  - ⚠️ **내가 틀린 것**: 그 사각지대에서 **느려지지도 않았다.** 풀(720 MiB)보다
+    작아서 계단을 안 밟는다. 임계값을 32MB 로 낮추면 쪼개지긴 하나 이득 없음
+    (1.03~1.07배, 산포 0.2~0.33s). **256MB 기본값은 합리적**
+  - **hot key 분리가 최선**: 1.22배, 반복 퍼짐 0.11s. hot 쪽 dim 이 한 행이라 공짜
+  - ❌ **소박한 salting 은 진다**: 0.82~0.94배. dim ×16 복제 비용이 이득을 먹는다
+  - ❌ **파티션 수 늘리기 무효** (음성 대조군): 200→2000 에서 hot 525.9→512.0 MiB (2.6%)
+  - **NULL key**: inner 는 `PushedFilters: [IsNotNull(key)]` 로 셔플 전에 털어내고
+    outer 는 못 턴다 → hot **59.4배**(19.4 vs 1,155.6 MiB), 시간 1.53배. 플랜으로 확인
 - ⬜ S7·S9 미착수 (S9 PMU 는 권장 안 함) · 최종 산출물: 블로그(`20-blog-draft.md`) / LinkedIn
 
 ## 빠른 시작

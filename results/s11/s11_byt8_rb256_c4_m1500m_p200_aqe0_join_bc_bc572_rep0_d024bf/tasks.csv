@@ -1,0 +1,6 @@
+stage_id,stage_name,task_id,index,attempt,launch_time,finish_time,duration_ms,failed,executor_run_ms,executor_cpu_ns,deser_ms,gc_ms,result_size,peak_exec_mem,spill_mem,spill_disk,input_bytes,input_records,sr_bytes,sr_records,sr_fetch_wait_ms,sr_remote_to_disk,sw_bytes,sw_records,sw_time_ns
+0,parquet at NativeMethodAccessorImpl.java:0,0,0,0,1789804728710,1789804729175,465,False,370,46621124,58,10,2276,0,0,0,0,0,0,0,0,0,0,0,0
+1,$anonfun$withThreadLocalCaptured$2 at CompletableFuture.java:1768,1,0,0,1789804730348,1789804731874,1526,False,1407,1339541394,11,47,7487559,0,0,0,0,750000,0,0,0,0,0,0,0
+1,$anonfun$withThreadLocalCaptured$2 at CompletableFuture.java:1768,3,2,0,1789804730350,1789804731886,1536,False,1387,1321253825,11,47,7496565,0,0,0,0,750000,0,0,0,0,0,0,0
+1,$anonfun$withThreadLocalCaptured$2 at CompletableFuture.java:1768,2,1,0,1789804730350,1789804731904,1554,False,1433,1365491001,12,47,7496507,0,0,0,0,750000,0,0,0,0,0,0,0
+1,$anonfun$withThreadLocalCaptured$2 at CompletableFuture.java:1768,4,3,0,1789804730350,1789804731913,1563,False,1383,1331331926,11,47,7494283,0,0,0,0,750000,0,0,0,0,0,0,0
