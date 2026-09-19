@@ -24,7 +24,8 @@
 | [18-s6-closing.md](18-s6-closing.md) | ⛔ **S6 종결.** io.max는 이 장비에서 ~50MB/s 이하에서만 계기로 쓸 수 있다 |
 | [19-s8-generalization.md](19-s8-generalization.md) | ⭐ **S8.** 결론이 `sort` 밖에서도 서는가 — **법칙은 일반화되고 상수는 안 된다** |
 | [21-s8b-per-key-ops.md](21-s8b-per-key-ops.md) | ⭐ **S8b.** window 도 같은 천장(712.0). 집계는 왜 못 재는지 확정 |
-| [20-blog-draft.md](20-blog-draft.md) | 기술 블로그 초안 (최종 산출물) |
+| [22-blog-post.md](22-blog-post.md) | ⭐ **기술 블로그 최종 원고.** daehong770.me.kr 스타일(서론/본론/결론+부록) |
+| [20-blog-draft.md](20-blog-draft.md) | 블로그 작업 초안 (발견 7개 나열식) — 22 의 재료 |
 
 ## 현재 상태 (2026-09-19)
 
