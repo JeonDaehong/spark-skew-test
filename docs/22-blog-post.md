@@ -787,19 +787,95 @@ raw 바이트를 봤더니 이랬다.
 
 ## 부록
 
-### A. 측정 조건
+### A. 측정 환경
+
+재현에 필요한 값은 전부 적는다. 아래는 실행 때마다 인스턴스에서 자동으로 수집한
+환경 리포트(`docs/ec2-env-report.txt`)의 실제 출력이다.
+
+#### 하드웨어
 
 | 항목 | 값 |
 |---|---|
-| 인스턴스 | EC2 m6id.4xlarge 스팟 · ap-northeast-2 |
-| CPU / 메모리 | Intel Xeon 8375C 16 vCPU / 61 GB |
-| 저장장치 | 인스턴스 스토어 NVMe 885 GB |
-| Spark / JDK | 4.0.1 (고정) / 21 |
-| 실행 모드 | `local[N]` — **단일 노드. 노드 간 네트워크 셔플은 이 실험에 없다** |
-| 데이터 | 8 GiB · 200 파티션 · 결정론적 시드 |
-| 반복 | 실험별 2~5회, `rep`을 바깥 루프에 두어 시간 순서 효과를 제거 |
-| 통제 | run마다 페이지 캐시 drop (실패 시 run 중단) |
+| 인스턴스 | **EC2 m6id.4xlarge 스팟** · ap-northeast-2 |
+| AMI | `ami-086a43496cb46286c` (Ubuntu 24.04) — **핀 고정** |
+| CPU | Intel Xeon Platinum 8375C @ 2.90GHz |
+| 코어 구성 | **물리 8코어 × 2스레드 = 16 vCPU** (하이퍼스레딩 켜짐) |
+| 메모리 | 61 GB |
+| 데이터 디스크 | **인스턴스 스토어 NVMe 884.8 GB** → `/data` |
+| 루트 | EBS 60 GB → `/` (결과만 여기 둔다) |
+| CPU 주파수 거버너 | **없음** (`no cpufreq`) — Nitro라 게스트에서 조절 불가 |
+| PMU | **사용 불가.** `perf stat -e cycles` → `No supported events found` |
+
+마지막 줄 때문에 "CPU 사이클·캐시미스까지 내려가는" 계획은 접었다. Nitro
+가상화에서는 하드웨어 카운터가 게스트에 노출되지 않는다. `.metal` 인스턴스가
+필요한데, 설명이 그 전 레이어에서 끝나서 답할 질문이 없다고 판단해 안 갔다.
+
+**16 vCPU 가 물리 16코어가 아니라는 점은 읽을 때 감안해야 한다.** 실험에서
+`local[N]` 의 N 은 최대 6까지만 올렸으므로 물리 코어(8개) 안에 들어간다.
+다만 하이퍼스레딩 자체를 끄고 비교해보지는 않았다.
+
+#### 소프트웨어
+
+| 항목 | 값 |
+|---|---|
+| OS | Ubuntu 24.04 |
+| JDK | **openjdk 21.0.12** (2026-07-21) |
+| PySpark | **4.0.1** — 핀 고정 |
+| cgroup | **v2** (`cgroup2fs`) — S6의 `io.max` 실험에 필요 |
+| `vm.dirty_ratio` | **20** (기본값) |
+| `vm.dirty_background_ratio` | **10** (기본값) |
+
+커널 노브 둘은 **S6(커널 실험)에서만** 건드렸다. 나머지 전 실험에서 기본값 고정이다.
+
+#### Spark 설정 — 전 실험 고정
+
+실험 변수가 아닌 것은 전부 못 박았다. 하나라도 흔들리면 비교가 깨진다.
+
+```
+spark.memory.fraction                 0.6      -> 실행 풀 720 MiB 가 여기서 나온다
+spark.memory.storageFraction          0.5
+spark.sql.shuffle.partitions          200
+spark.sql.autoBroadcastJoinThreshold  -1       -> SortMergeJoin 강제
+                                                 (broadcast 실험에서만 힌트로 우회)
+spark.eventLog.enabled                true
+spark.eventLog.compress               false    -> 파싱에 추가 의존성이 없게
+spark.eventLog.rolling.enabled        false
+spark.ui.enabled                      false
+spark.ui.showConsoleProgress          false    -> 진행바 CR 이 로그를 덮어쓴다
+spark.driver.maxResultSize            1g
+--driver-memory                       1500m    -> local 모드라 이게 곧 executor 힙
+```
+
+`spark.io.compression.codec` 과 `spark.shuffle.compress` 는 **S6에서만 변수**였고
+나머지는 lz4 기본값이다.
+
+#### 데이터
+
+| 항목 | 값 |
+|---|---|
+| 크기 | **8 GiB** (2.1 실무 편만 1 GiB·4 GiB) |
+| 포맷 | parquet, **무압축** — 압축이 걸리면 "총 바이트 고정" 통제가 깨진다 |
+| 스키마 | `key: int`, `payload: string` |
+| cold key | 10,000개 |
+| hot key | **1개** (`key = 0`) |
+| 행 폭 | 64 / 256 / 1024 / 2048 B (실험별) |
+| 시드 | 고정 — 같은 인자면 같은 데이터가 나온다 |
+
+#### 측정 방법
+
+| 항목 | 값 |
+|---|---|
+| 반복 | 실험별 2~5회. **`rep`을 바깥 루프**에 둬서 시간 순서 효과가 변수와 교락되지 않게 |
+| 집계 | **median + IQR.** 평균은 안 쓴다 — 양봉을 뭉갠다 (2.9에서 데인 적 있다) |
+| 캐시 통제 | run마다 페이지 캐시 drop. **실패하면 그 run을 중단** |
+| 커널 샘플링 | **0.25초 간격**으로 `/proc/meminfo`(Dirty/Writeback), `/proc/vmstat`(nr_dirty, pgpgout), `/proc/pressure/{io,memory,cpu}`(PSI), `/proc/stat` |
+| Spark 지표 | 이벤트 로그를 직접 파싱. 태스크 단위 원자료를 전부 보관 |
 | 총 run 수 | **742** (smoke·diag 제외 시 739) |
+| 총 비용 | 약 **$6.5** |
+
+인스턴스는 세션마다 새로 띄우고 끝나면 지웠다. 그래서 **"어제 돌린 게 남아
+있어서"** 같은 오염이 구조적으로 없다. 대신 데이터셋은 매번 다시 만들었다
+(결정론적 시드라 같은 데이터가 나온다).
 
 ### B. 이 결과를 어디까지 믿어야 하나
 
